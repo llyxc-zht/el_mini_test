@@ -33,7 +33,7 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
     class env:
         num_envs = 4096
-        num_observations = 272 
+        num_observations = 272 -187
         num_privileged_obs = None # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise 
         num_actions = 18
         num_policy_outputs = 24
@@ -64,7 +64,7 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
         dynamic_friction = 1.0
         restitution = 0.
         # rough terrain only:
-        measure_heights = True
+        measure_heights = False
         measured_points_x = [-0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] # 1mx1.6m rectangle (without center line)
         measured_points_y = [-0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5]
         selected = False # select a unique terrain type and pass all arguments
@@ -80,7 +80,7 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
         slope_treshold = 0.6 # slopes above this threshold will be corrected to vertical surfaces
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.17] # x,y,z [m]
+        pos = [0.0, 0.0, 0.25] # x,y,z [m]
         default_joint_angles = {
                 # 左前腿 (LF)
                 "LF_HAA": 0.0,    # 左前髋关节外展/内收角度
@@ -114,27 +114,27 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
             }
 
     class control( LeggedRobotCfg.control ):
-        control_type = 'P' # P: position, V: velocity, T: torques, D:compute delays、frictions、disturbances...
+        control_type = 'D' # P: position, V: velocity, T: torques, D:compute delays、frictions、disturbances...
         # PD Drive parameters:
         stiffness = {'HAA': 40., 'HFE': 40., 'KFE': 40.}  # [N*m/rad]
         damping = {'HAA': 0.8, 'HFE': 0.8, 'KFE': 0.8}     # [N*m*s/rad]
-        # stiffness = {'HAA': 40., 'HFE': 40., 'KFE': 40.,
-        #          'RB_HAA': 45., 'RB_HFE': 45., 'RB_KFE': 45.}  # [N*m/rad]
-        # damping = {'HAA': 0.8, 'HFE': 0.8, 'KFE': 0.8,
-        #        'RB_HAA': 0.9, 'RB_HFE': 0.9, 'RB_KFE': 0.9}     # [N*m*s/rad]
+        # stiffness = {'HAA': 60., 'HFE': 60., 'KFE': 60.}  # [N*m/rad]
+        # damping = {'HAA': 0.8, 'HFE': 0.8, 'KFE': 0.8}     # [N*m*s/rad]
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 4
         use_actuator_network = True
         actuator_net_file = "{LEGGED_GYM_ROOT_DIR}/resources/actuator_nets/anydrive_v3_lstm.pt"
         class motor_dynamics:
-            motor_tau_delay = 0.05
-            J=[0.01, 0.01, 0.01, 0.01, 0.01, 0.01]  # 各关节初始转动惯量
-            B=[0.1, 0.1, 0.1, 0.1, 0.1, 0.1]        # 初始粘性阻尼系数
-            Tc=[0.05, 0.05, 0.05, 0.05, 0.05, 0.05] # 初始库伦摩擦力矩
-            Ts=[0.02, 0.02, 0.02, 0.02, 0.02, 0.02] # 初始Stribeck摩擦系数
+            motor_tau_delay = 0.1
+            J=[0.01, 0.01, 0.01]  # 各关节初始转动惯量
+            B=[0.1, 0.1, 0.1]        # 初始粘性阻尼系数
+            Tc=[0.05, 0.05, 0.05] # 初始库伦摩擦力矩
+            Ts=[0.02, 0.02, 0.02] # 初始Stribeck摩擦系数
             omega_s: float = 0.1,  # Stribeck速度阈值
+            gravity_flag = 'CONSTANT',  # 是否启用重力扰动,F=False,T=True,SIN=正弦扰动,CONSTANT=常数扰动
             gravity_amp: float = 0.5,    # 重力扰动振幅
             gravity_freq: float = 0.2,   # 重力扰动频率
+            dist_flag = 'CONSTANT',     # 是否启用外部扰动,F=False,T=True,SIN=正弦扰动,CONSTANT=常数扰动
             dist_amp: float = 0.3,       # 外部扰动振幅
             dist_freq: float = 1.0       # 外部扰动频率
     
@@ -146,9 +146,9 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
         heading_command = False # if true: compute ang vel command from heading error
         gamepad_commands = False
         class ranges:
-            lin_vel_x = [-1.0, 1.0] # min max [m/s]
-            lin_vel_y = [-0.8, 0.8]   # min max [m/s]
-            ang_vel_yaw = [-1, 1]    # min max [rad/s]
+            lin_vel_x = [-0.8, 0.8] # min max [m/s]
+            lin_vel_y = [-0.5, 0.5]   # min max [m/s]
+            ang_vel_yaw = [-0.8, 0.8]    # min max [rad/s]
             heading = [-3.14, 3.14]
 
     class asset( LeggedRobotCfg.asset ):
@@ -156,21 +156,8 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
         name = "el_mini"
         foot_name = "FOOT"
         shoulder_name = "shoulder"
-        penalize_contacts_on = ["RB_SHANK",
-                                "LB_SHANK", 
-                                "RM_SHANK",
-                                "LM_SHANK",
-                                "RF_SHANK",
-                                "LF_SHANK",
-
-                                "RB_THIGH",
-                                "LB_THIGH",
-                                "RM_THIGH",
-                                "LM_THIGH",
-                                "RF_THIGH",
-                                "LF_THIGH"]
+        penalize_contacts_on = ["SHANK","THIGH"]
         terminate_after_contacts_on = ["BASE","HIP", "KNEE", "SHOULDER"]  #plane
-        # terminate_after_contacts_on = ["BASE"]
         self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
         flip_visual_attachments = False
 
@@ -196,17 +183,17 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
             lin_vel_z = -1
             ang_vel_xy = -1
             orientation = -1
-            torques = -0.00001 #-0.00001
-            dof_vel = -0.0005
+            torques = -0.00001
+            dof_vel = -0.00001
             dof_acc = -0.000001
             action_rate =-1.e-6
             collision = -1.5
             termination = -1.5
             dof_pos_limits = -1
-            dof_vel_limits = -1
-            torque_limits = 0
-            tracking_lin_vel = 5
-            tracking_ang_vel = 2
+            dof_vel_limits = -0.5
+            torque_limits = -0.001
+            tracking_lin_vel = 6
+            tracking_ang_vel = 2.5
             feet_air_time = 0.5 #1
             stumble = 0 
             stand_still = -0.5
@@ -243,7 +230,7 @@ class EL_MINI_TEST_Cfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
-        base_height_target = 0.17
+        base_height_target = 0.2
         max_contact_force = 300. # forces above this value are penalized
         still_all = False
     
@@ -275,7 +262,7 @@ class EL_MINI_TEST_PPO( LeggedRobotCfgPPO ):
 
         # logging
         save_interval = 50 # check for potential saves every this many iterations
-        experiment_name = 'cpo'
+        experiment_name = 'cpo'#'cpo'
         run_name = ''
         # load and resume
         resume = False         

@@ -108,7 +108,15 @@ def play(args):
                     'base_vel_y': env.base_lin_vel[robot_index, 1].item(),
                     'base_vel_z': env.base_lin_vel[robot_index, 2].item(),
                     'base_vel_yaw': env.base_ang_vel[robot_index, 2].item(),
-                    'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy()
+                    'contact_forces_z': env.contact_forces[robot_index, env.feet_indices, 2].cpu().numpy(),
+                
+                    "torque_feedforward": env.torque_feedforward[robot_index, joint_index].item(),
+                    "torque_friction": env.torque_friction[robot_index, joint_index].item(),
+                    "torque_gravity": env.torque_gravity[robot_index, joint_index].item(),
+                    "torque_dist": env.torque_dist[robot_index, joint_index].item(),
+                    "torque_no_delay": env.torque_no_delay[robot_index, joint_index].item(),
+                    "torque_final":env.torque_final[robot_index, joint_index].item(),
+                    "torque_pd": env.torque_pd[robot_index, joint_index].item()
                 }
             )
         elif i==stop_state_log:

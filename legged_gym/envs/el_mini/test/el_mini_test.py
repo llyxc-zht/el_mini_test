@@ -47,6 +47,9 @@ from legged_gym.envs.base.PMTrajectoryGenerator import PMTrajectoryGenerator
 
 from legged_gym.envs.el_mini.test.references.motor_dynamics import MotorDynamics
 
+
+
+
 class EL_MINI_TEST(LeggedRobot):
     cfg : EL_MINI_TEST_Cfg
      # env Init
@@ -93,14 +96,36 @@ class EL_MINI_TEST(LeggedRobot):
         self.count = 0
         self.actions_debug = None
 
+        motor_dyn_cfg = self.cfg.control.motor_dynamics
+        J_expanded = torch.tensor(motor_dyn_cfg.J*6,device=self.device)
+        B_expanded = torch.tensor(motor_dyn_cfg.B*6,device=self.device)
+        Tc_expanded = torch.tensor(motor_dyn_cfg.Tc*6,device=self.device)
+        Ts_expanded = torch.tensor(motor_dyn_cfg.Ts*6,device=self.device)
+        if isinstance(motor_dyn_cfg.omega_s, list):
+            omega_s_expanded = torch.tensor(motor_dyn_cfg.omega_s * 6, device=self.device)
+        else:
+            omega_s_expanded = motor_dyn_cfg.omega_s
+        
+
+
+
         self.motor_dyn = MotorDynamics(
-            joint_num=self.num_dof,
+            num_envs=self.num_envs,
+            joint_num=self.num_dof,  # Use total number of DOFs (18)
             dt=self.sim_params.dt,
-            J=torch.tensor(cfg.control.motor_dynamics.J) if hasattr(cfg.control.motor_dynamics, "J") else None,
-            B=torch.tensor(cfg.control.motor_dynamics.B) if hasattr(cfg.control.motor_dynamics, "B") else None,
-            Tc=torch.tensor(cfg.control.motor_dynamics.Tc) if hasattr(cfg.control.motor_dynamics, "Tc") else None,
-            Ts=torch.tensor(cfg.control.motor_dynamics.Ts) if hasattr(cfg.control.motor_dynamics, "Ts") else None,
-            omega_s=cfg.control.motor_dynamics.omega_s if hasattr(cfg.control.motor_dynamics, "omega_s") else 0.1
+            tau_delay=motor_dyn_cfg.motor_tau_delay,
+            J=J_expanded,
+            B=B_expanded,
+            Tc=Tc_expanded,
+            Ts=Ts_expanded,
+            omega_s= omega_s_expanded,
+            gravity_flag=motor_dyn_cfg.gravity_flag,
+            gravity_amp=motor_dyn_cfg.gravity_amp,
+            gravity_freq=motor_dyn_cfg.gravity_freq,
+            dist_flag=motor_dyn_cfg.dist_flag,
+            dist_amp=motor_dyn_cfg.dist_amp,
+            dist_freq=motor_dyn_cfg.dist_freq,
+            device=self.device
         ) 
 
         
@@ -158,6 +183,17 @@ class EL_MINI_TEST(LeggedRobot):
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+
+        # log buffers
+        self.torque_feedforward = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+        self.torque_friction = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+        self.torque_gravity = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+        self.torque_dist = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+        self.torque_no_delay = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+        self.torque_final = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+        self.torque_pd = torch.zeros((self.num_envs, self.num_dof), dtype=torch.float, device=self.device, requires_grad=False)
+
+
         self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -201,6 +237,7 @@ class EL_MINI_TEST(LeggedRobot):
                 if self.cfg.control.control_type in ["P", "V"]:
                     print(f"PD gain of joint {name} were not defined, setting them to zero")
         self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
+
 
     def _init_custom_buffers(self):
         # initialize body properties
@@ -617,6 +654,7 @@ class EL_MINI_TEST(LeggedRobot):
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
 
 
+
     # process
     def step(self, policy_outputs):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -646,6 +684,7 @@ class EL_MINI_TEST(LeggedRobot):
 
             self.gym.refresh_dof_state_tensor(self.sim)
             self.gym.refresh_actor_root_state_tensor(self.sim)
+
 
         self.post_physics_step()
         self.count += 1
@@ -723,7 +762,7 @@ class EL_MINI_TEST(LeggedRobot):
         q_des = actions
         qd_des = torch.zeros_like(q_des)
 
-        torque_pd = self.p_gains * self.Kp_factors * (q_des - q) -\
+        torque_pd = self.p_gains * self.Kp_factors * (q_des - q) +\
                 self.d_gains * self.Kd_factors * (qd_des - qd)
 
         control_type = self.cfg.control.control_type  # PD controller
@@ -733,16 +772,40 @@ class EL_MINI_TEST(LeggedRobot):
             torque_final = torque_pd * self.motor_strengths
             return torch.clip(torque_final, -self.torque_limits, self.torque_limits)
         elif control_type == "D":
-            torque_feedforward = MotorDynamics.compute_torque_feedfoeward(qdd,qd)
-            torque_friction = MotorDynamics.compute_torque_stribeck_friction(qd)
-            torque_gravity = MotorDynamics.compute_torque_gravity(self.dt)
-            torque_dist = MotorDynamics.compute_torque_disturbance(self.dt)
+            torque_feedforward = self.motor_dyn.compute_torque_feedfoeward(qdd,qd)
+            torque_friction = self.motor_dyn.compute_torque_stribeck_friction(qd)
+            torque_gravity = self.motor_dyn.compute_torque_gravity(self.dt)
+            torque_dist = self.motor_dyn.compute_torque_disturbance(self.dt)
 
             torque_no_delay = torque_pd + torque_gravity + torque_dist + torque_friction + torque_feedforward
 
-            torque_final = MotorDynamics.compute_torque_delay_compensate(torque_no_delay,self.dt)
+            torque_final = self.motor_dyn.compute_torque_delay_compensate(torque_no_delay,self.dt)
+
+
+            # print(f"--- Step {self.common_step_counter}: Torque Info (Env 0) ---")
+            # print(f"  PD Torque         : {np.round(torque_pd[0].detach().cpu().numpy(), 2)}")
+            # print(f"  Gravity Comp      : {np.round(torque_gravity[0].detach().cpu().numpy(), 2)}")
+            # print(f"  Disturbance       : {np.round(torque_dist[0].detach().cpu().numpy(), 2)}")
+            # print(f"  Friction          : {np.round(torque_friction[0].detach().cpu().numpy(), 2)}")
+            # print(f"  Feedforward       : {np.round(torque_feedforward[0].detach().cpu().numpy(), 2)}")
+            # print(f"  Total (no delay)  : {np.round(torque_no_delay[0].detach().cpu().numpy(), 2)}")
+            # print(f"  Final (with delay): {np.round(torque_final[0].detach().cpu().numpy(), 2)}")
+            # print("----------------------------------------------------")
+
+            #log to self
+            self.torque_feedforward = torque_feedforward
+            self.torque_friction = torque_friction
+            self.torque_gravity = torque_gravity
+            self.torque_dist = torque_dist
+            self.torque_no_delay = torque_no_delay
+            self.torque_final = torque_final
+            self.torque_pd = torque_pd
+
+
 
             return torch.clip(torque_final, -self.torque_limits, self.torque_limits)
+    
+        
 
 
     def compute_observations(self):

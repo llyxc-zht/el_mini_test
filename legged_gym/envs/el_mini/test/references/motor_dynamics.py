@@ -9,6 +9,7 @@ class MotorDynamics(nn.Module):
     基于文档中的动力学方程实现
     """
     def __init__(self, 
+                 num_envs: int, # 环境数量
                  joint_num: int,  # 关节数量
                  dt: float = 0.005,  # 仿真步长（需与LeggedGym配置一致）
                  tau_delay: float = 0.01,  # 控制延迟时间常数（初始值，可辨识）
@@ -18,15 +19,24 @@ class MotorDynamics(nn.Module):
                  Ts = None,  # Stribeck摩擦系数（初始值，可辨识）
                  omega_s: float = 0.1,  # Stribeck速度阈值（文档默认建议值）
                  # --- 新增：正弦扰动参数 ---
+                 gravity_flag = 'F',  # 是否启用重力扰动
                  gravity_amp: float = 0.5,    # 重力扰动振幅
                  gravity_freq: float = 0.2,   # 重力扰动频率
+                 dist_flag = 'F',     # 是否启用外部扰动
                  dist_amp: float = 0.3,       # 外部扰动振幅
-                 dist_freq: float = 1.0       # 外部扰动频率
+                 dist_freq: float = 1.0,       # 外部扰动频率
+                 device: Optional[torch.device] = None
                  ):
         super().__init__()
+        self.num_envs = num_envs
         self.joint_num = joint_num
+        self.device = device
         self.dt = dt
-        self.omega_s = omega_s  # 区分高低速摩擦的阈值
+        # Ensure omega_s is a tensor for broadcasting
+        if not isinstance(omega_s, torch.Tensor):
+            self.omega_s = torch.tensor(omega_s, device=J.device if J is not None else 'cpu')
+        else:
+            self.omega_s = omega_s
         
         # 初始化可辨识参数（注册为nn.Parameter便于后续优化）
         self.J = nn.Parameter(torch.ones(joint_num) * 0.01 if J is None else J)  # 转动惯量
@@ -36,14 +46,19 @@ class MotorDynamics(nn.Module):
         self.tau_delay = nn.Parameter(torch.tensor(tau_delay))  # 控制延迟时间常数
         
         # 控制延迟一阶滞后模型的状态（存储上一时刻的指令力矩）
-        self.prev_cmd_torque = torch.zeros(1, self.joint_num)
+        self.prev_cmd_torque = torch.zeros(self.num_envs, self.joint_num,device=self.device)
 
         # --- 新增：内部时间和扰动参数 ---
         self.time = 0.005
+        self.gravity_flag = gravity_flag
         self.gravity_amp = gravity_amp
         self.gravity_freq = gravity_freq
+        self.dist_flag = dist_flag
         self.dist_amp = dist_amp
         self.dist_freq = dist_freq
+
+        self.gravity_torque_scalar = 0
+        self.disturbance_torque_scalar = 0
     
     def compute_torque_feedfoeward(self,qdd,qd):
             """
@@ -76,15 +91,23 @@ class MotorDynamics(nn.Module):
         # 初始化摩擦力矩
         Tf = torch.zeros_like(omega)
         
-        # 低速段：Stribeck效应主导 Tf = Ts * sign(omega) * exp(-|omega|/omega_s) + B*omega
-        # 注意：这里使用 Ts (Stribeck摩擦系数) 而不是 Tc
-        Tf[low_speed_mask] = (self.Ts * torch.sign(omega[low_speed_mask]) * 
-                            torch.exp(-torch.abs(omega[low_speed_mask])/self.omega_s) +
-                            self.B * omega[low_speed_mask])
+        # --- 正确的计算方式 ---
+        # 先利用广播机制计算出所有情况下的力矩值
         
-        # 高速段：库伦摩擦+粘性摩擦 Tf = Tc * sign(omega) + B*omega
-        Tf[high_speed_mask] = (self.Tc * torch.sign(omega[high_speed_mask]) +
-                            self.B * omega[high_speed_mask])
+        # 计算低速段的Stribeck摩擦力矩
+        # 维度: (18,) * (4096, 18) * (4096, 18) + (18,) * (4096, 18) -> (4096, 18)
+        Tf_low_speed = (self.Ts * torch.sign(omega) * 
+                        torch.exp(-torch.abs(omega) / self.omega_s) +
+                        self.B * omega)
+        
+        # 计算高速段的库伦和粘性摩擦力矩
+        # 维度: (18,) * (4096, 18) + (18,) * (4096, 18) -> (4096, 18)
+        Tf_high_speed = (self.Tc * torch.sign(omega) +
+                         self.B * omega)
+        
+        # 使用掩码将计算好的值填充到最终的力矩张量中
+        Tf[low_speed_mask] = Tf_low_speed[low_speed_mask]
+        Tf[high_speed_mask] = Tf_high_speed[high_speed_mask]
         
         return Tf
     
@@ -94,10 +117,19 @@ class MotorDynamics(nn.Module):
         输出：torque_gravity - 正弦形式的重力扰动力矩 (joint_num,)
         """
         # 计算当前时刻的扰动力矩值
-        gravity_torque_scalar = self.gravity_amp * torch.sin(2 * torch.pi * self.gravity_freq * time)
+        if self.gravity_flag == 'F':
+            return torch.zeros((self.num_envs, self.joint_num), device=self.J.device)
+        elif self.gravity_flag =='CONSTANT':
+            self.gravity_torque_scalar = self.gravity_amp
+            torque_gravity = torch.full((self.num_envs, self.joint_num,), self.gravity_torque_scalar, device=self.J.device)
+            return torque_gravity
+        elif self.gravity_flag == 'SIN':
+            # Convert the float argument to a tensor before passing to torch.sin
+            sin_input = torch.tensor(2 * np.pi * self.gravity_freq * time, device=self.J.device)
+            self.gravity_torque_scalar = self.gravity_amp * torch.sin(sin_input)
         
         # 将标量值扩展到所有关节
-        torque_gravity = torch.full((self.joint_num,), gravity_torque_scalar, device=self.J.device)
+        torque_gravity = torch.full((self.num_envs, self.joint_num,), self.gravity_torque_scalar, device=self.J.device)
         return torque_gravity
          
     def compute_torque_disturbance(self,time):
@@ -106,10 +138,19 @@ class MotorDynamics(nn.Module):
         输出：torque_disturbance - 正弦形式的外部扰动力矩 (joint_num,)
         """
         # 计算当前时刻的扰动力矩值
-        disturbance_torque_scalar = self.dist_amp * torch.sin(2 * torch.pi * self.dist_freq * time)
+        if self.dist_flag == 'F':
+            return torch.zeros((self.num_envs, self.joint_num), device=self.J.device)
+        elif self.dist_flag =='CONSTANT':
+            self.disturbance_torque_scalar = self.dist_amp
+            torque_disturbance = torch.full((self.num_envs, self.joint_num,), self.disturbance_torque_scalar, device=self.J.device)
+            return torque_disturbance
+        elif self.dist_flag == 'SIN':
+            # Convert the float argument to a tensor before passing to torch.sin
+            sin_input = torch.tensor(2 * np.pi * self.dist_freq * time, device=self.J.device)
+            self.disturbance_torque_scalar = self.dist_amp * torch.sin(sin_input)
 
         # 将标量值扩展到所有关节
-        torque_disturbance = torch.full((self.joint_num,), disturbance_torque_scalar, device=self.J.device)
+        torque_disturbance = torch.full((self.num_envs, self.joint_num,), self.disturbance_torque_scalar, device=self.J.device)
         return torque_disturbance
 
     def compute_torque_delay_compensate(self, cmd_torque,time):

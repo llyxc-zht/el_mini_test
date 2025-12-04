@@ -63,9 +63,12 @@ class Logger:
         self.plot_process.start()
 
     def _plot(self):
+        # --- 主状态图画布 ---
         nb_rows = 3
         nb_cols = 3
-        fig, axs = plt.subplots(nb_rows, nb_cols)
+        fig, axs = plt.subplots(nb_rows, nb_cols, figsize=(12, 9))
+        fig.suptitle('Robot States', fontsize=16)
+
         for key, value in self.state_log.items():
             time = np.linspace(0, len(value)*self.dt, len(value))
             break
@@ -113,18 +116,35 @@ class Logger:
                 a.plot(time, forces[:, i], label=f'force {i}')
         a.set(xlabel='time [s]', ylabel='Forces z [N]', title='Vertical Contact forces')
         a.legend()
-        # plot torque/vel curves
-        a = axs[2, 1]
-        if log["dof_vel"]!=[] and log["dof_torque"]!=[]: a.plot(log["dof_vel"], log["dof_torque"], 'x', label='measured')
-        a.set(xlabel='Joint vel [rad/s]', ylabel='Joint Torque [Nm]', title='Torque/velocity curves')
-        a.legend()
-        # plot torques
-        a = axs[2, 2]
-        if log["dof_torque"]!=[]: a.plot(time, log["dof_torque"], label='measured')
-        a.set(xlabel='time [s]', ylabel='Joint Torque [Nm]', title='Torque')
-        a.legend()
-        plt.show()
+        
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
+        # --- 单独的力矩图画布 ---
+        torque_fig, torque_axs = plt.subplots(2, 1, figsize=(12, 10))
+        torque_fig.suptitle('Torque Analysis', fontsize=16)
+
+        # 图 1: 主要力矩对比
+        a = torque_axs[0]
+        if log["torque_pd"]!=[]: a.plot(time, log["torque_pd"], label='pd_torque')
+        if log["torque_final"]!=[]: a.plot(time, log["torque_final"], label='final (with delay)')
+        if log["torque_no_delay"]!=[]: a.plot(time, log["torque_no_delay"], label='no_delay')
+        if log["dof_torque"]!=[]: a.plot(time, log["dof_torque"], label='measured_torque (target)')
+        a.set(xlabel='time [s]', ylabel='Torque [Nm]', title='Torque Comparison (PD, Delay, Measured)')
+        a.legend()
+
+        # 图 2: 剩余力矩分量
+        a = torque_axs[1]
+        if log["torque_feedforward"]!=[]: a.plot(time, log["torque_feedforward"], label='feedforward')
+        if log["torque_gravity"]!=[]: a.plot(time, log["torque_gravity"], label='gravity')
+        if log["torque_friction"]!=[]: a.plot(time, log["torque_friction"], label='friction')
+        if log["torque_dist"]!=[]: a.plot(time, log["torque_dist"], label='disturbance')
+        a.set(xlabel='time [s]', ylabel='Torque [Nm]', title='Other Torque Components')
+        a.legend()
+
+        torque_fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        plt.show()
+        
     def print_rewards(self):
         print("Average rewards per second:")
         for key, values in self.rew_log.items():
